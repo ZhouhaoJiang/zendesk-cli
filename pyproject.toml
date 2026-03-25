@@ -1,0 +1,21 @@
+[project]
+name = "zendesk-cli"
+version = "0.1.0"
+description = "Zendesk 命令行工单管理工具"
+requires-python = ">=3.8"
+dependencies = [
+    "click>=8.1",
+    "requests>=2.31",
+    "rich>=13.7",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+zd = "zd.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["zd"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
