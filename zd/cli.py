@@ -672,6 +672,115 @@ def search_tickets(ctx, query, page, per_page, sort, order):
         ctx.exit(1)
 
 
+# ── tag: 工单标签管理 ────────────────────────────────
+
+
+@cli.group("tag")
+def tag_cmd():
+    """工单标签管理
+
+    \b
+    示例:
+      zd tag list 1709            # 查看工单标签
+      zd tag add 1709 bug urgent  # 添加标签
+      zd tag rm 1709 bug          # 移除标签
+      zd tag set 1709 a b c       # 替换全部标签
+    """
+    pass
+
+
+@tag_cmd.command("list")
+@click.argument("ticket_id", type=int)
+@click.pass_context
+def tag_list(ctx, ticket_id):
+    """查看工单当前标签"""
+    _ensure_config(ctx)
+    try:
+        tags = client.get_ticket_tags(ticket_id)
+        if not tags:
+            info(f"工单 #{ticket_id} 没有标签。")
+            return
+        console.print(f"\n[bold]工单 #{ticket_id} 标签 ({len(tags)} 个):[/bold]")
+        for tag in tags:
+            console.print(f"  • [cyan]{tag}[/cyan]")
+        console.print()
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+@tag_cmd.command("add")
+@click.argument("ticket_id", type=int)
+@click.argument("tags", nargs=-1, required=True)
+@click.pass_context
+def tag_add(ctx, ticket_id, tags):
+    """添加标签（不影响已有标签）
+
+    \b
+    示例:
+      zd tag add 1709 bug urgent
+    """
+    _ensure_config(ctx)
+    try:
+        result = client.add_ticket_tags(ticket_id, list(tags))
+        updated_tags = result.get("ticket", {}).get("tags", [])
+        success(f"工单 #{ticket_id} 标签已更新: {', '.join(updated_tags)}")
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+@tag_cmd.command("rm")
+@click.argument("ticket_id", type=int)
+@click.argument("tags", nargs=-1, required=True)
+@click.pass_context
+def tag_remove(ctx, ticket_id, tags):
+    """移除指定标签
+
+    \b
+    示例:
+      zd tag rm 1709 bug
+    """
+    _ensure_config(ctx)
+    try:
+        result = client.remove_ticket_tags(ticket_id, list(tags))
+        updated_tags = result.get("ticket", {}).get("tags", [])
+        if updated_tags:
+            success(f"工单 #{ticket_id} 剩余标签: {', '.join(updated_tags)}")
+        else:
+            success(f"工单 #{ticket_id} 标签已清空")
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+@tag_cmd.command("set")
+@click.argument("ticket_id", type=int)
+@click.argument("tags", nargs=-1, required=True)
+@click.option("-y", "--yes", is_flag=True, help="跳过确认")
+@click.pass_context
+def tag_set(ctx, ticket_id, tags, yes):
+    """替换工单全部标签（覆盖写）
+
+    \b
+    示例:
+      zd tag set 1709 billing high-priority
+    """
+    _ensure_config(ctx)
+    if not yes:
+        warn(f"⚠ 将覆盖工单 #{ticket_id} 的全部标签为: {', '.join(tags)}")
+        if not click.confirm("确认？"):
+            info("已取消。")
+            return
+    try:
+        result = client.set_ticket_tags(ticket_id, list(tags))
+        updated_tags = result.get("ticket", {}).get("tags", [])
+        success(f"工单 #{ticket_id} 标签已设置为: {', '.join(updated_tags)}")
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
 # ── views: 视图 ─────────────────────────────────────
 
 

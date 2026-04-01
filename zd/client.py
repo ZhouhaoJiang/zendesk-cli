@@ -170,6 +170,31 @@ class ZendeskClient:
             params["page[after]"] = after
         return self._get(f"tickets/{ticket_id}/conversation_log", params=params)
 
+    # ── 标签 ─────────────────────────────────────────
+
+    def set_ticket_tags(self, ticket_id: int, tags: list[str]) -> dict:
+        """替换工单的全部标签（覆盖写）"""
+        return self._put(f"tickets/{ticket_id}", {"ticket": {"tags": tags}})
+
+    def add_ticket_tags(self, ticket_id: int, tags: list[str]) -> dict:
+        """增量添加标签，不影响已有标签"""
+        ticket = self.get_ticket(ticket_id)
+        existing = ticket.get("ticket", {}).get("tags", [])
+        merged = list(dict.fromkeys(existing + tags))
+        return self._put(f"tickets/{ticket_id}", {"ticket": {"tags": merged}})
+
+    def remove_ticket_tags(self, ticket_id: int, tags: list[str]) -> dict:
+        """移除指定标签，保留其余标签"""
+        ticket = self.get_ticket(ticket_id)
+        existing = ticket.get("ticket", {}).get("tags", [])
+        remaining = [t for t in existing if t not in set(tags)]
+        return self._put(f"tickets/{ticket_id}", {"ticket": {"tags": remaining}})
+
+    def get_ticket_tags(self, ticket_id: int) -> list[str]:
+        """获取工单当前所有标签"""
+        ticket = self.get_ticket(ticket_id)
+        return ticket.get("ticket", {}).get("tags", [])
+
     # ── 搜索 ─────────────────────────────────────────
 
     def search_tickets(
