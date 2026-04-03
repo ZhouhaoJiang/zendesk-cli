@@ -59,10 +59,14 @@ zd export 12345 -o report.md        # 指定输出文件
 zd me                               # 当前用户信息
 zd user 67890                       # 查看用户信息
 
-# 内部备注
+# 回复工单
+zd reply 12345 "We've identified the issue..."  # 公开回复（客户可见）
+zd reply 12345 -f reply.txt                     # 从文件读取回复
+zd reply 12345 "Fixed." --status solved          # 回复 + 改状态
+zd reply 12345 "内部排查记录" --internal          # 内部备注（客户不可见）
+
+# 内部备注（reply --internal 的快捷方式）
 zd note 12345 "已确认是已知 bug"     # 添加内部备注（客户不可见）
-zd note 12345 -f note.txt           # 从文件读取备注
-zd note 12345 "排查结论" -y          # 跳过确认直接发送
 zd note 12345 "等用户确认" --status pending  # 备注 + 改状态
 
 # 附件
