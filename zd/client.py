@@ -144,15 +144,12 @@ class ZendeskClient:
     def update_ticket(self, ticket_id: int, **fields) -> dict:
         return self._put(f"tickets/{ticket_id}", {"ticket": fields})
 
-    def reply_ticket(
-        self, ticket_id: int, body: str, public: bool = True, status: Optional[str] = None
-    ) -> dict:
-        ticket_payload: dict = {
-            "comment": {"body": body, "public": public},
-        }
-        if status:
-            ticket_payload["status"] = status
-        return self._put(f"tickets/{ticket_id}", {"ticket": ticket_payload})
+    def add_internal_note(self, ticket_id: int, body: str) -> dict:
+        """添加内部备注（不对客户可见）"""
+        return self._put(
+            f"tickets/{ticket_id}",
+            {"ticket": {"comment": {"body": body, "public": False}}},
+        )
 
     def get_ticket_comments(
         self, ticket_id: int, page: int = 1, per_page: int = 100

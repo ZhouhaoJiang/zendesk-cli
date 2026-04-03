@@ -59,6 +59,11 @@ zd export 12345 -o report.md        # 指定输出文件
 zd me                               # 当前用户信息
 zd user 67890                       # 查看用户信息
 
+# 内部备注
+zd note 12345 "已确认是已知 bug"     # 添加内部备注（客户不可见）
+zd note 12345 -f note.txt           # 从文件读取备注
+zd note 12345 "排查结论" -y          # 跳过确认直接发送
+
 # 附件
 zd attachments 12345                # 下载附件和正文内联图片到 工单附件/12345工单-附件/
 zd attachments 12345 --list-only    # 仅列出不下载
@@ -69,7 +74,8 @@ zd attachments 12345 --list-only    # 仅列出不下载
 - `zd ticket <id> -c` 会自动识别 Zendesk Messaging 工单，并优先读取 `conversation_log`
 - `zd ticket <id> -c --raw-thread` 可查看更原始的 `event type` / `source.type` / `content.type`
 - `zd export <id>` 默认只打印到终端；只有传 `-o` 时才写文件
-- `zd attachments <id>` 会同时尝试下载标准附件、正文内联图片和 Messaging 图片，但 `sc/attachments` 这类 URL 可能需要浏览器登录态，API token 不一定能直接下载
+- `zd attachments <id>` 会同时尝试下载标准附件、正文内联图片和 Messaging 图片
+- Messaging 工单的附件 URL 格式为 `/sc/attachments/v2/{att_id}/...`，直接用 API token 请求会返回 401。CLI 通过 `/api/v2/ticket_attachments/{att_id}/content` 接口获取带签名的重定向链接来间接下载，已支持自动处理
 - 已下载成功的附件/图片会记录到 `工单附件/<id>工单-附件/.download-manifest.json`，后续重复处理时默认跳过本地已存在文件，只补下载新增内容
 
 ## Codex 对比处理

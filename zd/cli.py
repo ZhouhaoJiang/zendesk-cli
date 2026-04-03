@@ -565,31 +565,23 @@ def view_ticket(ctx, ticket_id, comments, with_images, raw_thread, with_ctx, as_
         ctx.exit(1)
 
 
-# ── reply: 回复工单 ──────────────────────────────────
+# ── note: 内部备注 ───────────────────────────────────
 
 
-@cli.command("reply")
+@cli.command("note")
 @click.argument("ticket_id", type=int)
 @click.argument("body", required=False, default=None)
-@click.option("--internal", is_flag=True, help="发送内部备注（不对客户可见）")
-@click.option(
-    "--status",
-    type=click.Choice(VALID_STATUSES),
-    default=None,
-    help="同时更新工单状态",
-)
-@click.option("-f", "--file", "file_path", type=click.Path(exists=True), help="从文件读取回复内容")
+@click.option("-f", "--file", "file_path", type=click.Path(exists=True), help="从文件读取备注内容")
 @click.option("-y", "--yes", is_flag=True, help="跳过确认直接发送")
 @click.pass_context
-def reply_ticket(ctx, ticket_id, body, internal, status, file_path, yes):
-    """回复工单（添加公开评论或内部备注）
+def add_note(ctx, ticket_id, body, file_path, yes):
+    """添加内部备注（仅团队可见，客户不可见）
 
     \b
     示例:
-      zd reply 1709 "We've identified the issue..."
-      zd reply 1709 -f reply.txt
-      zd reply 1709 "Fixed." --status pending
-      zd reply 1709 "Internal note" --internal
+      zd note 1709 "已确认是已知 bug，等下个版本修复"
+      zd note 1709 -f note.txt
+      zd note 1709 "排查结论：用户配额已满" -y
     """
     _ensure_config(ctx)
 
@@ -598,33 +590,25 @@ def reply_ticket(ctx, ticket_id, body, internal, status, file_path, yes):
     elif body is None:
         body = click.edit()
         if not body:
-            error("回复内容为空，已取消。")
+            error("备注内容为空，已取消。")
             return
 
     body = body.strip()
     if not body:
-        error("回复内容为空，已取消。")
+        error("备注内容为空，已取消。")
         return
 
-    public = not internal
-    comment_type = "内部备注" if internal else "公开回复"
-
-    preview_text = body if len(body) <= 100 else body[:100] + "..."
-    console.print(f"\n[bold]工单 #{ticket_id} — {comment_type}[/bold]")
-    console.print(f"[dim]{preview_text}[/dim]")
-    if status:
-        console.print(f"同时设置状态 → {status} ({STATUS_LABELS.get(status, '')})")
-    console.print()
+    preview = body if len(body) <= 200 else body[:200] + "..."
+    console.print(f"\n[bold]工单 #{ticket_id} — 内部备注[/bold]")
+    console.print(f"[dim]{preview}[/dim]\n")
 
     if not yes and not click.confirm("确认发送？"):
         info("已取消。")
         return
 
     try:
-        client.reply_ticket(ticket_id, body=body, public=public, status=status)
-        success(f"工单 #{ticket_id} {comment_type}已发送 ✓")
-        if status:
-            success(f"状态已更新 → {status} ({STATUS_LABELS.get(status, '')})")
+        client.add_internal_note(ticket_id, body)
+        success(f"工单 #{ticket_id} 内部备注已发送 ✓")
     except ZendeskError as e:
         error(str(e))
         ctx.exit(1)
