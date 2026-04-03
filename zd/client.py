@@ -177,18 +177,12 @@ class ZendeskClient:
         return self._put(f"tickets/{ticket_id}", {"ticket": {"tags": tags}})
 
     def add_ticket_tags(self, ticket_id: int, tags: list[str]) -> dict:
-        """增量添加标签，不影响已有标签"""
-        ticket = self.get_ticket(ticket_id)
-        existing = ticket.get("ticket", {}).get("tags", [])
-        merged = list(dict.fromkeys(existing + tags))
-        return self._put(f"tickets/{ticket_id}", {"ticket": {"tags": merged}})
+        """增量添加标签，不影响已有标签（使用 additional_tags 原子操作）"""
+        return self._put(f"tickets/{ticket_id}", {"ticket": {"additional_tags": tags}})
 
     def remove_ticket_tags(self, ticket_id: int, tags: list[str]) -> dict:
-        """移除指定标签，保留其余标签"""
-        ticket = self.get_ticket(ticket_id)
-        existing = ticket.get("ticket", {}).get("tags", [])
-        remaining = [t for t in existing if t not in set(tags)]
-        return self._put(f"tickets/{ticket_id}", {"ticket": {"tags": remaining}})
+        """移除指定标签，保留其余标签（使用 remove_tags 原子操作）"""
+        return self._put(f"tickets/{ticket_id}", {"ticket": {"remove_tags": tags}})
 
     def get_ticket_tags(self, ticket_id: int) -> list[str]:
         """获取工单当前所有标签"""
