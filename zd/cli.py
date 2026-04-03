@@ -243,6 +243,34 @@ def _next_available_path(out_dir: Path, file_name: str, suffix_index: int) -> Pa
     return out_dir / f"{candidate.stem}_{suffix_index}{candidate.suffix}"
 
 
+def _download_sc_attachment(url: str) -> Optional[bytes]:
+    """通过 ticket_attachments API 下载 Messaging 附件。
+
+    /sc/attachments/ URL 无法直接下载（401），但可以通过
+    /api/v2/ticket_attachments/{att_id}/content 获取带 token 的重定向链接。
+    """
+    m = re.search(r"/sc/attachments/v2/([^/]+)/", url)
+    if not m:
+        return None
+    att_id = m.group(1)
+    try:
+        resp = requests.get(
+            f"{config.base_url}/ticket_attachments/{att_id}/content",
+            auth=config.auth,
+            allow_redirects=False,
+            timeout=30,
+        )
+        if resp.status_code in (301, 302, 303, 307):
+            redirect_url = resp.headers.get("Location", "")
+            if redirect_url:
+                dl = requests.get(redirect_url, timeout=60)
+                if dl.ok:
+                    return dl.content
+    except Exception:
+        pass
+    return None
+
+
 def _download_ticket_images(
     ticket_id: int, images: list[dict], output_dir: Optional[Path] = None
 ) -> tuple[dict[str, Path], list[dict], dict[str, Path]]:
@@ -282,16 +310,13 @@ def _download_ticket_images(
                 continue
 
             if "/sc/attachments/" in url:
-                try:
-                    resp2 = requests.get(url, timeout=60)
-                    if resp2.ok:
-                        out_path.write_bytes(resp2.content)
-                        downloaded[url] = out_path
-                        manifest[url] = out_path.name
-                        continue
-                except Exception:
-                    pass
-                failed.append({**img, "reason": "sc/attachments 需要浏览器会话认证"})
+                content = _download_sc_attachment(url)
+                if content:
+                    out_path.write_bytes(content)
+                    downloaded[url] = out_path
+                    manifest[url] = out_path.name
+                    continue
+                failed.append({**img, "reason": "sc/attachments 下载失败（重定向方式也未成功）"})
             else:
                 failed.append({**img, "reason": f"HTTP {resp.status_code}"})
         except requests.exceptions.Timeout:
@@ -976,11 +1001,15 @@ def download_attachments(ctx, ticket_id, output_dir, list_only):
                 success(f"{fname} → {out_path}")
                 downloaded += 1
             else:
+                if "/sc/attachments/" in url:
+                    content = _download_sc_attachment(url)
+                    if content:
+                        out_path.write_bytes(content)
+                        manifest[url] = out_path.name
+                        success(f"{fname} → {out_path}")
+                        downloaded += 1
+                        continue
                 error(f"{fname} 下载失败 (HTTP {resp.status_code})")
-                if resp.status_code == 401 and "/sc/attachments/" in url:
-                    warn(
-                        "  该附件来自 Messaging `sc/attachments`，当前 API token 无法直接拉取原文件。"
-                    )
 
         _save_download_manifest(out_dir, manifest)
 
