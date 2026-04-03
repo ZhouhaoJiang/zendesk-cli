@@ -63,6 +63,7 @@ zd user 67890                       # 查看用户信息
 zd note 12345 "已确认是已知 bug"     # 添加内部备注（客户不可见）
 zd note 12345 -f note.txt           # 从文件读取备注
 zd note 12345 "排查结论" -y          # 跳过确认直接发送
+zd note 12345 "等用户确认" --status pending  # 备注 + 改状态
 
 # 附件
 zd attachments 12345                # 下载附件和正文内联图片到 工单附件/12345工单-附件/

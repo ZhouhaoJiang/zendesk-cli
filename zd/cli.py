@@ -571,10 +571,16 @@ def view_ticket(ctx, ticket_id, comments, with_images, raw_thread, with_ctx, as_
 @cli.command("note")
 @click.argument("ticket_id", type=int)
 @click.argument("body", required=False, default=None)
+@click.option(
+    "--status",
+    type=click.Choice(VALID_STATUSES),
+    default=None,
+    help="同时更新工单状态",
+)
 @click.option("-f", "--file", "file_path", type=click.Path(exists=True), help="从文件读取备注内容")
 @click.option("-y", "--yes", is_flag=True, help="跳过确认直接发送")
 @click.pass_context
-def add_note(ctx, ticket_id, body, file_path, yes):
+def add_note(ctx, ticket_id, body, status, file_path, yes):
     """添加内部备注（仅团队可见，客户不可见）
 
     \b
@@ -582,6 +588,7 @@ def add_note(ctx, ticket_id, body, file_path, yes):
       zd note 1709 "已确认是已知 bug，等下个版本修复"
       zd note 1709 -f note.txt
       zd note 1709 "排查结论：用户配额已满" -y
+      zd note 1709 "等用户确认" --status pending
     """
     _ensure_config(ctx)
 
@@ -600,15 +607,20 @@ def add_note(ctx, ticket_id, body, file_path, yes):
 
     preview = body if len(body) <= 200 else body[:200] + "..."
     console.print(f"\n[bold]工单 #{ticket_id} — 内部备注[/bold]")
-    console.print(f"[dim]{preview}[/dim]\n")
+    console.print(f"[dim]{preview}[/dim]")
+    if status:
+        console.print(f"同时设置状态 → {status} ({STATUS_LABELS.get(status, '')})")
+    console.print()
 
     if not yes and not click.confirm("确认发送？"):
         info("已取消。")
         return
 
     try:
-        client.add_internal_note(ticket_id, body)
+        client.add_internal_note(ticket_id, body, status=status)
         success(f"工单 #{ticket_id} 内部备注已发送 ✓")
+        if status:
+            success(f"状态已更新 → {status} ({STATUS_LABELS.get(status, '')})")
     except ZendeskError as e:
         error(str(e))
         ctx.exit(1)
