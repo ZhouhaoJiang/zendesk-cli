@@ -243,6 +243,34 @@ def _next_available_path(out_dir: Path, file_name: str, suffix_index: int) -> Pa
     return out_dir / f"{candidate.stem}_{suffix_index}{candidate.suffix}"
 
 
+def _download_sc_attachment(url: str) -> Optional[bytes]:
+    """通过 ticket_attachments API 下载 Messaging 附件。
+
+    /sc/attachments/ URL 无法直接下载（401），但可以通过
+    /api/v2/ticket_attachments/{att_id}/content 获取带 token 的重定向链接。
+    """
+    m = re.search(r"/sc/attachments/v2/([^/]+)/", url)
+    if not m:
+        return None
+    att_id = m.group(1)
+    try:
+        resp = requests.get(
+            f"{config.base_url}/ticket_attachments/{att_id}/content",
+            auth=config.auth,
+            allow_redirects=False,
+            timeout=30,
+        )
+        if resp.status_code in (301, 302, 303, 307):
+            redirect_url = resp.headers.get("Location", "")
+            if redirect_url:
+                dl = requests.get(redirect_url, timeout=60)
+                if dl.ok:
+                    return dl.content
+    except Exception:
+        pass
+    return None
+
+
 def _download_ticket_images(
     ticket_id: int, images: list[dict], output_dir: Optional[Path] = None
 ) -> tuple[dict[str, Path], list[dict], dict[str, Path]]:
@@ -282,16 +310,13 @@ def _download_ticket_images(
                 continue
 
             if "/sc/attachments/" in url:
-                try:
-                    resp2 = requests.get(url, timeout=60)
-                    if resp2.ok:
-                        out_path.write_bytes(resp2.content)
-                        downloaded[url] = out_path
-                        manifest[url] = out_path.name
-                        continue
-                except Exception:
-                    pass
-                failed.append({**img, "reason": "sc/attachments 需要浏览器会话认证"})
+                content = _download_sc_attachment(url)
+                if content:
+                    out_path.write_bytes(content)
+                    downloaded[url] = out_path
+                    manifest[url] = out_path.name
+                    continue
+                failed.append({**img, "reason": "sc/attachments 下载失败（重定向方式也未成功）"})
             else:
                 failed.append({**img, "reason": f"HTTP {resp.status_code}"})
         except requests.exceptions.Timeout:
@@ -586,10 +611,11 @@ def reply_ticket(ctx, ticket_id, body, internal, status, file_path, yes):
 
     \b
     示例:
-      zd reply 1709 "We've identified the issue..."
-      zd reply 1709 -f reply.txt
-      zd reply 1709 "Fixed." --status pending
-      zd reply 1709 "Internal note" --internal
+      zd reply 12345 "We've identified the issue..."
+      zd reply 12345 -f reply.txt
+      zd reply 12345 "Fixed." --status solved
+      zd reply 12345 "内部排查记录" --internal
+      zd reply 12345 "等用户确认" --internal --status pending
     """
     _ensure_config(ctx)
 
@@ -609,9 +635,9 @@ def reply_ticket(ctx, ticket_id, body, internal, status, file_path, yes):
     public = not internal
     comment_type = "内部备注" if internal else "公开回复"
 
-    preview_text = body if len(body) <= 100 else body[:100] + "..."
+    preview = body if len(body) <= 200 else body[:200] + "..."
     console.print(f"\n[bold]工单 #{ticket_id} — {comment_type}[/bold]")
-    console.print(f"[dim]{preview_text}[/dim]")
+    console.print(f"[dim]{preview}[/dim]")
     if status:
         console.print(f"同时设置状态 → {status} ({STATUS_LABELS.get(status, '')})")
     console.print()
@@ -628,6 +654,37 @@ def reply_ticket(ctx, ticket_id, body, internal, status, file_path, yes):
     except ZendeskError as e:
         error(str(e))
         ctx.exit(1)
+
+
+# ── note: 内部备注（reply --internal 的快捷方式）──────
+
+
+@cli.command("note")
+@click.argument("ticket_id", type=int)
+@click.argument("body", required=False, default=None)
+@click.option(
+    "--status",
+    type=click.Choice(VALID_STATUSES),
+    default=None,
+    help="同时更新工单状态",
+)
+@click.option("-f", "--file", "file_path", type=click.Path(exists=True), help="从文件读取备注内容")
+@click.option("-y", "--yes", is_flag=True, help="跳过确认直接发送")
+@click.pass_context
+def add_note(ctx, ticket_id, body, status, file_path, yes):
+    """添加内部备注（仅团队可见，客户不可见）
+
+    等同于 zd reply --internal，快捷方式。
+
+    \b
+    示例:
+      zd note 12345 "已确认是已知 bug"
+      zd note 12345 -f note.txt
+      zd note 12345 "排查结论" -y
+      zd note 12345 "等用户确认" --status pending
+    """
+    # 直接转发给 reply 命令，设置 internal=True
+    ctx.invoke(reply_ticket, ticket_id=ticket_id, body=body, internal=True, status=status, file_path=file_path, yes=yes)
 
 
 # ── search: 搜索工单 ─────────────────────────────────
@@ -980,11 +1037,15 @@ def download_attachments(ctx, ticket_id, output_dir, list_only):
                 success(f"{fname} → {out_path}")
                 downloaded += 1
             else:
+                if "/sc/attachments/" in url:
+                    content = _download_sc_attachment(url)
+                    if content:
+                        out_path.write_bytes(content)
+                        manifest[url] = out_path.name
+                        success(f"{fname} → {out_path}")
+                        downloaded += 1
+                        continue
                 error(f"{fname} 下载失败 (HTTP {resp.status_code})")
-                if resp.status_code == 401 and "/sc/attachments/" in url:
-                    warn(
-                        "  该附件来自 Messaging `sc/attachments`，当前 API token 无法直接拉取原文件。"
-                    )
 
         _save_download_manifest(out_dir, manifest)
 
