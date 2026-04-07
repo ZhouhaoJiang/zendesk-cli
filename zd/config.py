@@ -23,6 +23,12 @@ class Config:
         self.subdomain = os.getenv("ZENDESK_SUBDOMAIN", "")
         self.email = os.getenv("ZENDESK_EMAIL", "")
         self.api_token = os.getenv("ZENDESK_API_TOKEN", "")
+        self.admin_email = os.getenv("ZENDESK_ADMIN_EMAIL", "")
+        self.admin_api_token = os.getenv("ZENDESK_ADMIN_API_TOKEN", "")
+
+    @property
+    def has_admin(self) -> bool:
+        return bool(self.admin_email and self.admin_api_token)
 
     @property
     def base_url(self) -> str:
@@ -31,6 +37,13 @@ class Config:
     @property
     def auth(self) -> tuple:
         return (f"{self.email}/token", self.api_token)
+
+    @property
+    def admin_auth(self) -> tuple:
+        """标签等需要更高权限操作使用的 admin 凭据，未配置时回退到普通凭据"""
+        if self.has_admin:
+            return (f"{self.admin_email}/token", self.admin_api_token)
+        return self.auth
 
     def validate(self) -> bool:
         missing = []

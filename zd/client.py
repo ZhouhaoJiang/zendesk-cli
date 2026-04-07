@@ -30,12 +30,21 @@ class ZendeskClient:
     def __init__(self):
         self.session = requests.Session()
         self.session.auth = config.auth
-        self.session.headers.update(
-            {
-                "Accept": "application/json",
-            }
-        )
+        self.session.headers.update({"Accept": "application/json"})
         self.base_url = config.base_url
+
+        self._admin_session: Optional[requests.Session] = None
+
+    @property
+    def admin_session(self) -> requests.Session:
+        """标签等需要更高权限的操作使用的 session，未配置 admin 时回退到普通 session"""
+        if not config.has_admin:
+            return self.session
+        if self._admin_session is None:
+            self._admin_session = requests.Session()
+            self._admin_session.auth = config.admin_auth
+            self._admin_session.headers.update({"Accept": "application/json"})
+        return self._admin_session
 
     def _get(self, endpoint: str, params: Optional[dict] = None) -> dict:
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
@@ -70,11 +79,52 @@ class ZendeskClient:
 
         return resp.json()
 
-    def _put(self, endpoint: str, json_data: dict) -> dict:
+    def _put(self, endpoint: str, json_data: dict, *, use_admin: bool = False) -> dict:
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        session = self.admin_session if use_admin else self.session
 
         try:
-            resp = self.session.put(url, json=json_data, timeout=REQUEST_TIMEOUT)
+            resp = session.put(url, json=json_data, timeout=REQUEST_TIMEOUT)
+        except Timeout:
+            raise ZendeskError(0, "请求超时", f"URL: {url}")
+        except ConnectionError:
+            raise ZendeskError(0, "网络连接失败，请检查 ZENDESK_SUBDOMAIN 是否正确")
+
+        if resp.status_code == 401:
+            raise ZendeskError(401, "认证失败，请检查 ZENDESK_EMAIL 和 ZENDESK_API_TOKEN")
+        if resp.status_code == 403:
+            raise ZendeskError(403, "权限不足，当前用户无权执行此操作")
+        if resp.status_code == 404:
+            raise ZendeskError(404, "资源不存在", endpoint)
+        if resp.status_code == 422:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = str(body.get("error", body.get("details", resp.text[:200])))
+            except Exception:
+                detail = resp.text[:200]
+            raise ZendeskError(422, "参数验证失败", detail)
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After", "60")
+            raise ZendeskError(429, f"请求频率超限，请 {retry_after} 秒后重试")
+
+        if not resp.ok:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = body.get("error", body.get("description", resp.text[:200]))
+            except Exception:
+                detail = resp.text[:200]
+            raise ZendeskError(resp.status_code, "API 请求失败", str(detail))
+
+        return resp.json()
+
+    def _delete(self, endpoint: str, json_data: dict, *, use_admin: bool = False) -> dict:
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        session = self.admin_session if use_admin else self.session
+
+        try:
+            resp = session.delete(url, json=json_data, timeout=REQUEST_TIMEOUT)
         except Timeout:
             raise ZendeskError(0, "请求超时", f"URL: {url}")
         except ConnectionError:
@@ -178,23 +228,40 @@ class ZendeskClient:
         return self._get(f"tickets/{ticket_id}/conversation_log", params=params)
 
     # ── 标签 ─────────────────────────────────────────
+    # 使用专用 Tags API（/tickets/{id}/tags）+ admin 凭据，
+    # 因为 ticket update 端点在权限不足时会静默忽略标签变更而不报错。
+    # Tags API: PUT = 合并追加, DELETE = 移除指定标签
 
     def set_ticket_tags(self, ticket_id: int, tags: list[str]) -> dict:
         """替换工单的全部标签（覆盖写）"""
-        return self._put(f"tickets/{ticket_id}", {"ticket": {"tags": tags}})
+        endpoint = f"tickets/{ticket_id}/tags"
+        current = self.get_ticket_tags(ticket_id)
+        if current:
+            self._delete(endpoint, {"tags": current}, use_admin=True)
+        if tags:
+            return self._put(endpoint, {"tags": tags}, use_admin=True)
+        return {"tags": []}
 
     def add_ticket_tags(self, ticket_id: int, tags: list[str]) -> dict:
-        """增量添加标签，不影响已有标签（使用 additional_tags 原子操作）"""
-        return self._put(f"tickets/{ticket_id}", {"ticket": {"additional_tags": tags}})
+        """增量添加标签，不影响已有标签（PUT = 合并）"""
+        result = self._put(f"tickets/{ticket_id}/tags", {"tags": tags}, use_admin=True)
+        actual = set(result.get("tags", []))
+        missing = set(tags) - actual
+        if missing:
+            raise ZendeskError(
+                403, "标签添加失败（权限不足或被 Zendesk 静默拒绝）",
+                f"未成功添加: {', '.join(sorted(missing))}",
+            )
+        return result
 
     def remove_ticket_tags(self, ticket_id: int, tags: list[str]) -> dict:
-        """移除指定标签，保留其余标签（使用 remove_tags 原子操作）"""
-        return self._put(f"tickets/{ticket_id}", {"ticket": {"remove_tags": tags}})
+        """移除指定标签，保留其余标签（DELETE = 移除）"""
+        return self._delete(f"tickets/{ticket_id}/tags", {"tags": tags}, use_admin=True)
 
     def get_ticket_tags(self, ticket_id: int) -> list[str]:
         """获取工单当前所有标签"""
-        ticket = self.get_ticket(ticket_id)
-        return ticket.get("ticket", {}).get("tags", [])
+        data = self._get(f"tickets/{ticket_id}/tags")
+        return data.get("tags", [])
 
     # ── 搜索 ─────────────────────────────────────────
 

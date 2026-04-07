@@ -780,7 +780,7 @@ def tag_add(ctx, ticket_id, tags):
     _ensure_config(ctx)
     try:
         result = client.add_ticket_tags(ticket_id, list(tags))
-        updated_tags = result.get("ticket", {}).get("tags", [])
+        updated_tags = result.get("tags", [])
         success(f"工单 #{ticket_id} 标签已更新: {', '.join(updated_tags)}")
     except ZendeskError as e:
         error(str(e))
@@ -801,7 +801,7 @@ def tag_remove(ctx, ticket_id, tags):
     _ensure_config(ctx)
     try:
         result = client.remove_ticket_tags(ticket_id, list(tags))
-        updated_tags = result.get("ticket", {}).get("tags", [])
+        updated_tags = result.get("tags", [])
         if updated_tags:
             success(f"工单 #{ticket_id} 剩余标签: {', '.join(updated_tags)}")
         else:
@@ -831,7 +831,7 @@ def tag_set(ctx, ticket_id, tags, yes):
             return
     try:
         result = client.set_ticket_tags(ticket_id, list(tags))
-        updated_tags = result.get("ticket", {}).get("tags", [])
+        updated_tags = result.get("tags", [])
         success(f"工单 #{ticket_id} 标签已设置为: {', '.join(updated_tags)}")
     except ZendeskError as e:
         error(str(e))
