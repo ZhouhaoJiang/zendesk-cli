@@ -195,21 +195,37 @@ class ZendeskClient:
         return self._put(f"tickets/{ticket_id}", {"ticket": fields})
 
     def reply_ticket(
-        self, ticket_id: int, body: str, public: bool = True, status: Optional[str] = None
+        self,
+        ticket_id: int,
+        body: str,
+        public: bool = True,
+        status: Optional[str] = None,
+        html_body: Optional[str] = None,
     ) -> dict:
-        """回复工单（公开评论或内部备注），可同时更新状态"""
-        ticket_payload: dict = {
-            "comment": {"body": body, "public": public},
-        }
+        """回复工单（公开评论或内部备注），可同时更新状态。
+
+        当 html_body 不为空时，Zendesk 会优先使用 HTML 渲染；
+        body 仍作为纯文本回退。
+        """
+        comment: dict = {"body": body, "public": public}
+        if html_body:
+            comment["html_body"] = html_body
+        ticket_payload: dict = {"comment": comment}
         if status:
             ticket_payload["status"] = status
         return self._put(f"tickets/{ticket_id}", {"ticket": ticket_payload})
 
     def add_internal_note(
-        self, ticket_id: int, body: str, status: Optional[str] = None
+        self,
+        ticket_id: int,
+        body: str,
+        status: Optional[str] = None,
+        html_body: Optional[str] = None,
     ) -> dict:
         """添加内部备注（不对客户可见），可同时更新状态"""
-        return self.reply_ticket(ticket_id, body=body, public=False, status=status)
+        return self.reply_ticket(
+            ticket_id, body=body, public=False, status=status, html_body=html_body
+        )
 
     def get_ticket_comments(
         self, ticket_id: int, page: int = 1, per_page: int = 100
