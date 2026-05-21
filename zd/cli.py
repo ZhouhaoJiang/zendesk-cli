@@ -139,8 +139,55 @@ def _extract_inline_image_urls(body: str) -> list[str]:
     return urls
 
 
+# 多模态模型 API 仅支持以下图片格式，其余格式（ico/svg/bmp/tiff/heic 等）
+# 会被拒绝并报 400 invalid image，需在收集阶段就过滤掉。
+_SUPPORTED_IMAGE_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+}
+_UNSUPPORTED_IMAGE_EXTS = {
+    ".ico",
+    ".cur",
+    ".svg",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".heic",
+    ".heif",
+    ".avif",
+}
+
+
+def _is_supported_image(content_type: str = "", *names: str) -> bool:
+    """判断图片是否为多模态模型 API 支持的格式（jpeg/png/gif/webp）。
+
+    .ico / .svg / .bmp / .tiff 等格式会被 API 拒绝（400 invalid image），
+    需在收集阶段就跳过，避免下载后分析报错。
+    """
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    if ctype in _SUPPORTED_IMAGE_TYPES:
+        return True
+    # content_type 明确指向某种不受支持的具体图片格式 → 跳过
+    if ctype.startswith("image/") and ctype not in ("image/", "image/*"):
+        return False
+    # content_type 缺失或为泛型时，回退到文件名/URL 后缀判断
+    for name in names:
+        if not name:
+            continue
+        path = urlparse(name).path if "://" in name else name
+        if Path(path).suffix.lower() in _UNSUPPORTED_IMAGE_EXTS:
+            return False
+    return True
+
+
 def _collect_all_image_urls(thread_type: str, items: list[dict]) -> list[dict]:
-    """收集所有图片 URL：附件中的图片 + HTML body 中的内联图片 + conversation_log image 事件。"""
+    """收集所有图片 URL：附件中的图片 + HTML body 中的内联图片 + conversation_log image 事件。
+
+    会跳过模型 API 不支持的图片格式（ico/svg/bmp/tiff 等）。
+    """
     images = []
     seen_urls = set()
 
@@ -149,12 +196,18 @@ def _collect_all_image_urls(thread_type: str, items: list[dict]) -> list[dict]:
             for att in item.get("attachments", []):
                 ctype = att.get("content_type", "")
                 url = att.get("content_url", "")
-                if ctype.startswith("image/") and url and url not in seen_urls:
+                fname = att.get("file_name", "image")
+                if (
+                    ctype.startswith("image/")
+                    and url
+                    and url not in seen_urls
+                    and _is_supported_image(ctype, fname, url)
+                ):
                     seen_urls.add(url)
                     images.append(
                         {
                             "index": i,
-                            "file_name": att.get("file_name", "image"),
+                            "file_name": fname,
                             "url": url,
                             "source": "attachment",
                         }
@@ -172,6 +225,8 @@ def _collect_all_image_urls(thread_type: str, items: list[dict]) -> list[dict]:
                     query_name = parse_qs(parsed.query).get("name", [""])[0]
                     path_name = parsed.path.rstrip("/").rsplit("/", 1)[-1]
                     fname = query_name or path_name or f"inline_{i}.png"
+                    if not _is_supported_image("", fname, url):
+                        continue
                     images.append(
                         {
                             "index": i,
@@ -184,12 +239,18 @@ def _collect_all_image_urls(thread_type: str, items: list[dict]) -> list[dict]:
             content = item.get("content") or {}
             if content.get("type") == "image":
                 url = content.get("media_url", "")
-                if url and url not in seen_urls:
+                fname = content.get("alt_text") or "image"
+                media_type = content.get("media_type", "")
+                if (
+                    url
+                    and url not in seen_urls
+                    and _is_supported_image(media_type, fname, url)
+                ):
                     seen_urls.add(url)
                     images.append(
                         {
                             "index": i,
-                            "file_name": content.get("alt_text") or "image",
+                            "file_name": fname,
                             "url": url,
                             "source": "image_event",
                         }
@@ -197,14 +258,18 @@ def _collect_all_image_urls(thread_type: str, items: list[dict]) -> list[dict]:
             for att in item.get("attachments", []):
                 ctype = att.get("content_type") or att.get("media_type", "")
                 url = att.get("content_url") or att.get("media_url", "")
-                if ctype.startswith("image/") and url and url not in seen_urls:
+                fname = att.get("file_name") or att.get("alt_text") or "image"
+                if (
+                    ctype.startswith("image/")
+                    and url
+                    and url not in seen_urls
+                    and _is_supported_image(ctype, fname, url)
+                ):
                     seen_urls.add(url)
                     images.append(
                         {
                             "index": i,
-                            "file_name": att.get("file_name")
-                            or att.get("alt_text")
-                            or "image",
+                            "file_name": fname,
                             "url": url,
                             "source": "attachment",
                         }
