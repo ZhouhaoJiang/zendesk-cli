@@ -670,8 +670,9 @@ def view_ticket(ctx, ticket_id, comments, with_images, raw_thread, with_ctx, as_
 )
 @click.option("-f", "--file", "file_path", type=click.Path(exists=True), help="从文件读取回复内容")
 @click.option("-y", "--yes", is_flag=True, help="跳过确认直接发送")
+@click.option("-a", "--attach", "attachments", multiple=True, type=click.Path(exists=True), help="附件文件路径（可多次使用 -a 添加多个）")
 @click.pass_context
-def reply_ticket(ctx, ticket_id, body, internal, status, file_path, yes):
+def reply_ticket(ctx, ticket_id, body, internal, status, file_path, attachments, yes):
     """回复工单（添加公开评论或内部备注）
 
     \b
@@ -712,7 +713,16 @@ def reply_ticket(ctx, ticket_id, body, internal, status, file_path, yes):
         return
 
     try:
-        client.reply_ticket(ticket_id, body=body, public=public, status=status)
+        # 上传附件
+        upload_tokens = []
+        if attachments:
+            for att_path in attachments:
+                info(f"上传附件: {att_path}")
+                token = client.upload_file(att_path)
+                upload_tokens.append(token)
+                success(f"附件上传成功: {Path(att_path).name}")
+
+        client.reply_ticket(ticket_id, body=body, public=public, status=status, uploads=upload_tokens or None)
         success(f"工单 #{ticket_id} {comment_type}已发送 ✓")
         if status:
             success(f"状态已更新 → {status} ({STATUS_LABELS.get(status, '')})")

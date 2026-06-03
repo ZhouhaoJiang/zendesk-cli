@@ -194,6 +194,55 @@ class ZendeskClient:
     def update_ticket(self, ticket_id: int, **fields) -> dict:
         return self._put(f"tickets/{ticket_id}", {"ticket": fields})
 
+
+    def upload_file(self, file_path: str, filename: Optional[str] = None) -> str:
+        """上传文件到 Zendesk，返回 upload token。
+
+        Zendesk Upload API: POST /api/v2/uploads.json?filename=xxx
+        返回的 token 可用于 comment.uploads 字段。
+        """
+        from pathlib import Path
+        import mimetypes
+
+        path = Path(file_path)
+        if not path.exists():
+            raise ZendeskError(0, f"文件不存在: {file_path}")
+
+        if filename is None:
+            filename = path.name
+
+        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        url = f"{self.base_url}/uploads.json?filename={filename}"
+
+        try:
+            with open(path, "rb") as f:
+                resp = self.session.post(
+                    url,
+                    data=f,
+                    headers={"Content-Type": content_type},
+                    timeout=60,
+                )
+        except Timeout:
+            raise ZendeskError(0, "上传超时", f"File: {file_path}")
+        except ConnectionError:
+            raise ZendeskError(0, "网络连接失败")
+
+        if not resp.ok:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = str(body.get("error", body.get("details", resp.text[:200])))
+            except Exception:
+                detail = resp.text[:200]
+            raise ZendeskError(resp.status_code, "文件上传失败", detail)
+
+        result = resp.json()
+        token = result.get("upload", {}).get("token", "")
+        if not token:
+            raise ZendeskError(0, "上传响应中未找到 token", str(result))
+        return token
+
+
     def reply_ticket(
         self,
         ticket_id: int,
@@ -201,19 +250,44 @@ class ZendeskClient:
         public: bool = True,
         status: Optional[str] = None,
         html_body: Optional[str] = None,
+        uploads: Optional[list] = None,
     ) -> dict:
         """回复工单（公开评论或内部备注），可同时更新状态。
 
         当 html_body 不为空时，Zendesk 会优先使用 HTML 渲染；
         body 仍作为纯文本回退。
+        uploads: upload token 列表，用于附带图片/附件。
         """
         comment: dict = {"body": body, "public": public}
         if html_body:
             comment["html_body"] = html_body
+        if uploads:
+            comment["uploads"] = uploads
         ticket_payload: dict = {"comment": comment}
         if status:
             ticket_payload["status"] = status
         return self._put(f"tickets/{ticket_id}", {"ticket": ticket_payload})
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     def add_internal_note(
         self,
