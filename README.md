@@ -1,6 +1,6 @@
-# zd — Zendesk 命令行工单查看工具（只读）
+# zd — Zendesk 命令行工单与知识库管理工具
 
-终端里查看 Zendesk 工单：列表、详情、搜索、Markdown 输出，不用切浏览器。
+终端里查看和处理 Zendesk 工单及 Help Center 文章，不用切浏览器。
 支持 Cursor + Codex 双引擎对比处理工单。
 
 ## 快速开始
@@ -59,6 +59,21 @@ zd export 12345 -o report.md        # 指定输出文件
 zd me                               # 当前用户信息
 zd user 67890                       # 查看用户信息
 
+# 知识库文章（读取）
+zd kb search "并发调优"              # 搜索文章
+zd kb article 43503681133204         # 查看文章详情
+zd kb categories                     # 列出分类
+zd kb sections                       # 列出章节
+zd kb list 12345                     # 列出章节下的文章
+
+# 知识库文章（写入，执行前默认要求确认）
+zd kb create 12345 "安装指南" -f article.html       # 创建草稿
+zd kb create 12345 "公告" -f article.html --publish # 创建并立即发布
+zd kb edit 43503681133204 --title "新标题"           # 编辑标题
+zd kb edit 43503681133204 -f article.html             # 编辑正文
+zd kb publish 43503681133204                           # 发布 zh-cn 版本
+zd kb archive 43503681133204                           # 归档整篇文章
+
 # 回复工单
 zd reply 12345 "We've identified the issue..."  # 公开回复（客户可见）
 zd reply 12345 -f reply.txt                     # 从文件读取回复
@@ -73,6 +88,15 @@ zd note 12345 "等用户确认" --status pending  # 备注 + 改状态
 zd attachments 12345                # 下载附件和正文内联图片到 工单附件/12345工单-附件/
 zd attachments 12345 --list-only    # 仅列出不下载
 ```
+
+### 知识库写操作说明
+
+- 写操作要求当前 Zendesk 用户是 Guide 管理员，或具有对应文章的管理/发布权限。
+- `zd kb create` 默认创建草稿且不通知订阅者；使用 `--publish` 可立即发布，使用 `--notify-subscribers` 可发送创建通知。
+- `zd kb edit`、`publish` 按 `--locale` 操作指定语言版本，默认 `zh-cn`。
+- `zd kb archive` 会归档整篇文章及其全部语言版本，可在 Zendesk Guide 界面恢复。
+- 所有知识库写命令默认要求交互确认；自动化脚本可显式传入 `-y`。
+- 通过 API 更新正文会把 Zendesk Content Blocks 扁平化为普通文本。包含 Content Blocks 的文章不要直接使用 `zd kb edit --body/-f` 覆盖正文。
 
 ## Messaging 工单说明
 

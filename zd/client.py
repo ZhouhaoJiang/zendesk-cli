@@ -119,12 +119,12 @@ class ZendeskClient:
 
         return resp.json()
 
-    def _delete(self, endpoint: str, json_data: dict, *, use_admin: bool = False) -> dict:
+    def _post(self, endpoint: str, json_data: dict, *, use_admin: bool = False) -> dict:
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         session = self.admin_session if use_admin else self.session
 
         try:
-            resp = session.delete(url, json=json_data, timeout=REQUEST_TIMEOUT)
+            resp = session.post(url, json=json_data, timeout=REQUEST_TIMEOUT)
         except Timeout:
             raise ZendeskError(0, "请求超时", f"URL: {url}")
         except ConnectionError:
@@ -157,6 +157,57 @@ class ZendeskClient:
                 detail = resp.text[:200]
             raise ZendeskError(resp.status_code, "API 请求失败", str(detail))
 
+        return resp.json()
+
+    def _delete(
+        self,
+        endpoint: str,
+        json_data: Optional[dict] = None,
+        *,
+        use_admin: bool = False,
+    ) -> dict:
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        session = self.admin_session if use_admin else self.session
+
+        try:
+            request_kwargs = {"timeout": REQUEST_TIMEOUT}
+            if json_data is not None:
+                request_kwargs["json"] = json_data
+            resp = session.delete(url, **request_kwargs)
+        except Timeout:
+            raise ZendeskError(0, "请求超时", f"URL: {url}")
+        except ConnectionError:
+            raise ZendeskError(0, "网络连接失败，请检查 ZENDESK_SUBDOMAIN 是否正确")
+
+        if resp.status_code == 401:
+            raise ZendeskError(401, "认证失败，请检查 ZENDESK_EMAIL 和 ZENDESK_API_TOKEN")
+        if resp.status_code == 403:
+            raise ZendeskError(403, "权限不足，当前用户无权执行此操作")
+        if resp.status_code == 404:
+            raise ZendeskError(404, "资源不存在", endpoint)
+        if resp.status_code == 422:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = str(body.get("error", body.get("details", resp.text[:200])))
+            except Exception:
+                detail = resp.text[:200]
+            raise ZendeskError(422, "参数验证失败", detail)
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After", "60")
+            raise ZendeskError(429, f"请求频率超限，请 {retry_after} 秒后重试")
+
+        if not resp.ok:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = body.get("error", body.get("description", resp.text[:200]))
+            except Exception:
+                detail = resp.text[:200]
+            raise ZendeskError(resp.status_code, "API 请求失败", str(detail))
+
+        if not resp.content:
+            return {}
         return resp.json()
 
     # ── 工单 ──────────────────────────────────────────
@@ -447,6 +498,77 @@ class ZendeskClient:
             f"help_center/{locale}/sections/{section_id}/articles",
             params={"page": page, "per_page": per_page},
         )
+
+    def create_article(
+        self,
+        section_id: int,
+        title: str,
+        body: str = "",
+        locale: str = "zh-cn",
+        draft: bool = True,
+        notify_subscribers: bool = False,
+        permission_group_id: Optional[int] = None,
+        user_segment_id: Optional[int] = None,
+        label_names: Optional[list[str]] = None,
+    ) -> dict:
+        """在指定章节创建帮助中心文章。"""
+        article = {
+            "title": title,
+            "body": body,
+            "locale": locale,
+            "draft": draft,
+        }
+        if permission_group_id is not None:
+            article["permission_group_id"] = permission_group_id
+        if user_segment_id is not None:
+            article["user_segment_id"] = user_segment_id
+        if label_names:
+            article["label_names"] = label_names
+
+        return self._post(
+            f"help_center/{locale}/sections/{section_id}/articles",
+            {
+                "article": article,
+                "notify_subscribers": notify_subscribers,
+            },
+        )
+
+    def update_article_translation(
+        self,
+        article_id: int,
+        locale: str = "zh-cn",
+        **fields,
+    ) -> dict:
+        """更新文章指定语言的标题、正文或草稿状态。"""
+        return self._put(
+            f"help_center/articles/{article_id}/translations/{locale}",
+            {"translation": fields},
+        )
+
+    def edit_article(
+        self,
+        article_id: int,
+        locale: str = "zh-cn",
+        title: Optional[str] = None,
+        body: Optional[str] = None,
+    ) -> dict:
+        """编辑文章指定语言的标题或正文。"""
+        fields = {}
+        if title is not None:
+            fields["title"] = title
+        if body is not None:
+            fields["body"] = body
+        if not fields:
+            raise ValueError("至少需要提供 title 或 body")
+        return self.update_article_translation(article_id, locale=locale, **fields)
+
+    def publish_article(self, article_id: int, locale: str = "zh-cn") -> dict:
+        """发布文章的指定语言版本。"""
+        return self.update_article_translation(article_id, locale=locale, draft=False)
+
+    def archive_article(self, article_id: int) -> dict:
+        """归档帮助中心文章。"""
+        return self._delete(f"help_center/articles/{article_id}")
 
 
 client = ZendeskClient()

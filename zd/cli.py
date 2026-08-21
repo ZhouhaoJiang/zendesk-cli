@@ -1,4 +1,4 @@
-"""Zendesk CLI 主入口 — 只读命令"""
+"""Zendesk CLI 主入口"""
 
 import json
 import re
@@ -44,6 +44,15 @@ from .display import (
 def _ensure_config(ctx):
     if not config.validate():
         ctx.exit(1)
+
+
+def _resolve_article_body(body: Optional[str], file_path: Optional[str]) -> Optional[str]:
+    """解析文章正文参数，并避免命令行正文与文件同时覆盖。"""
+    if body is not None and file_path:
+        raise click.UsageError("--body 和 --file 不能同时使用")
+    if file_path:
+        return Path(file_path).read_text(encoding="utf-8")
+    return body
 
 
 def _is_messaging_ticket(ticket: dict) -> bool:
@@ -1249,7 +1258,7 @@ def context_cmd(ctx, ticket_id, list_all, show_diff):
 
 @cli.group("kb")
 def kb_cmd():
-    """知识库 (Help Center) 文章查看
+    """知识库 (Help Center) 文章管理
 
     \b
     示例:
@@ -1258,6 +1267,10 @@ def kb_cmd():
       zd kb categories
       zd kb sections
       zd kb sections --category 12345
+      zd kb create 12345 "新文章" -f article.html
+      zd kb edit 43503681133204 --title "新标题"
+      zd kb publish 43503681133204
+      zd kb archive 43503681133204
     """
     pass
 
@@ -1390,6 +1403,210 @@ def kb_list_articles(ctx, section_id, page, per_page, locale):
         articles = data.get("articles", [])
         total = data.get("count", len(articles))
         show_articles(articles, total=total)
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+@kb_cmd.command("create")
+@click.argument("section_id", type=int)
+@click.argument("title")
+@click.option("-b", "--body", default=None, help="文章正文（HTML）")
+@click.option(
+    "-f",
+    "--file",
+    "file_path",
+    type=click.Path(exists=True, dir_okay=False),
+    help="从 UTF-8 文件读取文章正文",
+)
+@click.option(
+    "--locale", default="zh-cn", show_default=True, help="语言 (zh-cn, en-us 等)"
+)
+@click.option("--publish", is_flag=True, help="创建后立即发布；默认创建草稿")
+@click.option(
+    "--notify-subscribers",
+    is_flag=True,
+    help="通知订阅者；默认不发送创建通知",
+)
+@click.option("--permission-group-id", type=int, help="文章管理权限组 ID")
+@click.option("--user-segment-id", type=int, help="文章可见用户分群 ID；省略表示公开")
+@click.option("--label", "labels", multiple=True, help="文章标签，可重复指定")
+@click.option("-y", "--yes", is_flag=True, help="跳过确认")
+@click.pass_context
+def kb_create_article(
+    ctx,
+    section_id,
+    title,
+    body,
+    file_path,
+    locale,
+    publish,
+    notify_subscribers,
+    permission_group_id,
+    user_segment_id,
+    labels,
+    yes,
+):
+    """创建知识库文章（默认保存为草稿）
+
+    \b
+    示例:
+      zd kb create 12345 "安装指南" -f article.html
+      zd kb create 12345 "公告" --body "<p>内容</p>" --publish
+    """
+    title = title.strip()
+    if not title:
+        raise click.UsageError("文章标题不能为空")
+    body = _resolve_article_body(body, file_path)
+    if body is None:
+        body = ""
+
+    _ensure_config(ctx)
+    state = "立即发布" if publish else "保存为草稿"
+    console.print("\n[bold]创建知识库文章[/bold]")
+    console.print(f"标题: {title}")
+    console.print(f"章节: {section_id}  语言: {locale}  状态: {state}")
+    console.print(f"正文: {len(body)} 个字符")
+    if labels:
+        console.print(f"标签: {', '.join(labels)}")
+    if notify_subscribers:
+        warn("将通知文章订阅者。")
+    console.print()
+
+    if not yes and not click.confirm("确认创建？"):
+        info("已取消。")
+        return
+
+    try:
+        data = client.create_article(
+            section_id=section_id,
+            title=title,
+            body=body,
+            locale=locale,
+            draft=not publish,
+            notify_subscribers=notify_subscribers,
+            permission_group_id=permission_group_id,
+            user_segment_id=user_segment_id,
+            label_names=list(labels) or None,
+        )
+        article = data.get("article", data)
+        article_id = article.get("id", "?")
+        success(f"文章 #{article_id} 已创建（{'已发布' if publish else '草稿'}）")
+        if article.get("html_url"):
+            console.print(article["html_url"])
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+@kb_cmd.command("edit")
+@click.argument("article_id", type=int)
+@click.option("--title", default=None, help="新标题")
+@click.option("-b", "--body", default=None, help="新正文（HTML）")
+@click.option(
+    "-f",
+    "--file",
+    "file_path",
+    type=click.Path(exists=True, dir_okay=False),
+    help="从 UTF-8 文件读取新正文",
+)
+@click.option(
+    "--locale", default="zh-cn", show_default=True, help="语言 (zh-cn, en-us 等)"
+)
+@click.option("-y", "--yes", is_flag=True, help="跳过确认")
+@click.pass_context
+def kb_edit_article(ctx, article_id, title, body, file_path, locale, yes):
+    """编辑文章指定语言版本的标题或正文
+
+    \b
+    示例:
+      zd kb edit 43503681133204 --title "新标题"
+      zd kb edit 43503681133204 -f article.html --locale zh-cn
+    """
+    body = _resolve_article_body(body, file_path)
+    if title is None and body is None:
+        raise click.UsageError("至少需要提供 --title、--body 或 --file")
+    if title is not None:
+        title = title.strip()
+        if not title:
+            raise click.UsageError("文章标题不能为空")
+
+    _ensure_config(ctx)
+    console.print(f"\n[bold]编辑文章 #{article_id}[/bold]")
+    console.print(f"语言: {locale}")
+    if title is not None:
+        console.print(f"新标题: {title}")
+    if body is not None:
+        console.print(f"新正文: {len(body)} 个字符")
+        warn("正文更新会扁平化文章中的 Content Blocks，请确认该文章不依赖内容块。")
+    console.print()
+
+    if not yes and not click.confirm("确认更新？"):
+        info("已取消。")
+        return
+
+    try:
+        client.edit_article(
+            article_id=article_id,
+            locale=locale,
+            title=title,
+            body=body,
+        )
+        success(f"文章 #{article_id}（{locale}）已更新")
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+@kb_cmd.command("publish")
+@click.argument("article_id", type=int)
+@click.option(
+    "--locale", default="zh-cn", show_default=True, help="要发布的语言版本"
+)
+@click.option("-y", "--yes", is_flag=True, help="跳过确认")
+@click.pass_context
+def kb_publish_article(ctx, article_id, locale, yes):
+    """发布文章的指定语言版本
+
+    \b
+    示例:
+      zd kb publish 43503681133204
+      zd kb publish 43503681133204 --locale en-us -y
+    """
+    _ensure_config(ctx)
+    warn(f"将公开发布文章 #{article_id} 的 {locale} 版本。")
+    if not yes and not click.confirm("确认发布？"):
+        info("已取消。")
+        return
+
+    try:
+        client.publish_article(article_id=article_id, locale=locale)
+        success(f"文章 #{article_id}（{locale}）已发布")
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+@kb_cmd.command("archive")
+@click.argument("article_id", type=int)
+@click.option("-y", "--yes", is_flag=True, help="跳过确认")
+@click.pass_context
+def kb_archive_article(ctx, article_id, yes):
+    """归档文章（可在 Zendesk Guide 界面恢复）
+
+    \b
+    示例:
+      zd kb archive 43503681133204
+    """
+    _ensure_config(ctx)
+    warn(f"将归档整篇文章 #{article_id}，包括其所有语言版本。")
+    if not yes and not click.confirm("确认归档？"):
+        info("已取消。")
+        return
+
+    try:
+        client.archive_article(article_id=article_id)
+        success(f"文章 #{article_id} 已归档")
     except ZendeskError as e:
         error(str(e))
         ctx.exit(1)
