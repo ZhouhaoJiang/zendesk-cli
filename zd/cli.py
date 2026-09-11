@@ -1275,6 +1275,105 @@ def kb_cmd():
     pass
 
 
+@kb_cmd.command("locales")
+@click.pass_context
+def kb_locales(ctx):
+    """列出帮助中心已启用语言和默认语言。"""
+    _ensure_config(ctx)
+    try:
+        console.print_json(data=client.list_locales())
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+@kb_cmd.group("translations")
+def kb_translations():
+    """管理文章、分类、章节的独立语言版本（不自动翻译正文）。"""
+
+
+@kb_translations.command("list")
+@click.argument("kind", type=click.Choice(["articles", "categories", "sections"]))
+@click.argument("resource_id", type=int)
+@click.pass_context
+def kb_translations_list(ctx, kind, resource_id):
+    """查询全部语言版本、正文和发布状态（JSON）。"""
+    _ensure_config(ctx)
+    try:
+        console.print_json(data=client.list_translations(kind, resource_id))
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+def _translation_options(func):
+    for option in reversed([
+        click.argument("kind", type=click.Choice(["articles", "categories", "sections"])),
+        click.argument("resource_id", type=int),
+        click.option("--locale", required=True, help="目标语言，如 zh-cn / en-us / ja-jp"),
+        click.option("--title", default=None, help="对应语言的标题"),
+        click.option("-b", "--body", default=None, help="文章 HTML 正文；分类/章节描述"),
+        click.option("-f", "--file", "file_path", type=click.Path(exists=True, dir_okay=False)),
+        click.option("--publish/--draft", default=None, help="发布或保存草稿；编辑默认保留状态"),
+        click.option("-y", "--yes", is_flag=True, help="跳过确认"),
+    ]):
+        func = option(func)
+    return func
+
+
+def _write_translation(ctx, kind, resource_id, locale, title, body,
+                       file_path, publish, yes, create):
+    body = _resolve_article_body(body, file_path)
+    if title is not None:
+        title = title.strip()
+        if not title:
+            raise click.UsageError("标题不能为空")
+    if create and title is None:
+        raise click.UsageError("创建翻译需要 --title")
+    fields = {k: v for k, v in {"title": title, "body": body}.items() if v is not None}
+    if publish is not None:
+        fields["draft"] = not publish
+    if not create and not fields:
+        raise click.UsageError("至少需要提供 --title、--body/-f 或 --publish/--draft")
+    _ensure_config(ctx)
+    try:
+        if locale not in client.list_locales().get("locales", []):
+            raise click.UsageError(f"帮助中心未启用语言 {locale}；请先运行 zd kb locales")
+        console.print(f"{'创建' if create else '编辑'}翻译: {kind}/{resource_id}  语言: {locale}")
+        if kind == "articles":
+            warn("请确保所属分类和章节已提供相同语言版本，否则文章可能无法显示。")
+            if not create and body is not None:
+                warn("通过 API 覆盖正文会将 Content Blocks 扁平化，请先确认文章未使用该功能。")
+        if not yes and not click.confirm("确认保存？"):
+            info("已取消。")
+            return
+        if create:
+            client.create_translation(kind, resource_id, locale, title,
+                                      body=body or "", draft=publish is not True)
+        else:
+            client.edit_translation(kind, resource_id, locale, **fields)
+        success(f"翻译已保存: {kind}/{resource_id} ({locale})")
+    except ZendeskError as e:
+        error(str(e))
+        ctx.exit(1)
+
+
+@kb_translations.command("create")
+@_translation_options
+@click.pass_context
+def kb_translation_create(ctx, **kwargs):
+    """新增独立语言版本；默认草稿，使用 --publish 立即发布。"""
+    _write_translation(ctx, **kwargs, create=True)
+
+
+@kb_translations.command("edit")
+@_translation_options
+@click.pass_context
+def kb_translation_edit(ctx, **kwargs):
+    """修改已有语言版本；默认保留正文和发布状态等未指定字段。"""
+    _write_translation(ctx, **kwargs, create=False)
+
+
 @kb_cmd.command("search")
 @click.argument("query")
 @click.option("-p", "--page", default=1, show_default=True, help="页码")

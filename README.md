@@ -89,6 +89,38 @@ zd attachments 12345                # 下载附件和正文内联图片到 工�
 zd attachments 12345 --list-only    # 仅列出不下载
 ```
 
+### 知识库多语言版本
+
+同一篇文章通过语言版本展示中文、英文、日文，而不是在一份正文中拼接三种语言。
+CLI 不自动翻译文本，需要提供对应语言的标题和正文。先创建分类和章节的对应
+语言版本，再创建文章翻译，否则已发布文章可能无法在该语言的帮助中心显示。
+
+```bash
+zd kb locales                                # 查看已启用语言及默认语言
+zd kb translations list articles 12345       # 查询全部翻译、正文、草稿状态（JSON）
+zd kb translations list categories 67890
+zd kb translations list sections 98765
+
+# 为已有分类、章节新增英文版本
+zd kb translations create categories 67890 --locale en-us --title "Support Notices" --body "Service announcements" --publish
+zd kb translations create sections 98765 --locale en-us --title "Support Notices" --publish
+
+# 为同一篇文章新增英文、日文版本
+zd kb translations create articles 12345 --locale en-us --title "Support Availability" -f notice-en.html --publish
+zd kb translations create articles 12345 --locale ja-jp --title "サポート対応について" -f notice-ja.html --publish
+
+# 编辑已有版本；未指定的字段（包括发布状态）保持原值
+zd kb translations edit articles 12345 --locale zh-cn --title "技术支持服务安排" -f notice-zh.html
+zd kb translations edit categories 67890 --locale ja-jp --title "サポートのお知らせ"
+zd kb translations edit articles 12345 --locale ja-jp --publish
+```
+
+- `create` 默认创建草稿，`--publish` 立即发布；`edit` 可用 `--publish` 或 `--draft` 切换状态。
+- `--locale` 必填并检查是否已启用；日本語使用 `ja-jp`。`create` 必须提供非空 `--title`。
+- `create` 不会覆盖已有翻译；版本已存在时应使用 `edit`。
+- 文章的 `--body/-f` 是 HTML 正文，分类和章节的对应字段是描述。
+- 写入默认要求确认，自动化可传 `-y`。命令不会自动创建分类或章节，也不会自动生成翻译。
+
 ### 知识库写操作说明
 
 - 写操作要求当前 Zendesk 用户是 Guide 管理员，或具有对应文章的管理/发布权限。

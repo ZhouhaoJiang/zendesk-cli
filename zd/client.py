@@ -533,6 +533,39 @@ class ZendeskClient:
             },
         )
 
+    @staticmethod
+    def _translation_endpoint(kind: str, resource_id: int) -> str:
+        if kind not in ("articles", "categories", "sections"):
+            raise ValueError("不支持的翻译资源类型")
+        return f"help_center/{kind}/{resource_id}/translations"
+
+    def list_locales(self) -> dict:
+        return self._get("help_center/locales")
+
+    def list_translations(self, kind: str, resource_id: int) -> dict:
+        return self._get(self._translation_endpoint(kind, resource_id))
+
+    def create_translation(
+        self, kind: str, resource_id: int, locale: str, title: str,
+        body: str = "", draft: bool = True,
+    ) -> dict:
+        return self._post(
+            self._translation_endpoint(kind, resource_id),
+            {"translation": {
+                "locale": locale, "title": title, "body": body, "draft": draft,
+            }},
+        )
+
+    def edit_translation(
+        self, kind: str, resource_id: int, locale: str, **fields,
+    ) -> dict:
+        if not fields:
+            raise ValueError("至少需要提供一个翻译字段")
+        return self._put(
+            f"{self._translation_endpoint(kind, resource_id)}/{locale}",
+            {"translation": fields},
+        )
+
     def update_article_translation(
         self,
         article_id: int,
